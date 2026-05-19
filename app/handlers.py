@@ -1,139 +1,342 @@
-# message handlers
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
-from app.translator import translate_text, detect_language
-from app.speech import transcribe_audio
-import os
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 
-# Simple in-memory storage for last translation per user
-user_last_translation = {}
+from telegram.ext import (
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
 
+from app.translator import (
+    translate_text,
+    detect_language
+)
+
+from app.database import (
+    save_translation,
+    get_user_history
+)
+
+
+# START COMMAND
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    keyboard = [
+
+        [InlineKeyboardButton(
+            "🌍 Translate",
+            callback_data="translate"
+        )],
+
+        [InlineKeyboardButton(
+            "🎤 Voice Translate",
+            callback_data="voice"
+        )],
+
+        [InlineKeyboardButton(
+            "📜 History",
+            callback_data="history"
+        )],
+
+        [InlineKeyboardButton(
+            "ℹ️ About",
+            callback_data="about"
+        )]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
-        "Send text in any language.\nI will translate it into English."
+        "🚀 Welcome to Telegram Translator Bot\n\n"
+        "Choose an option below:",
+        reply_markup=reply_markup
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Commands:\n"
-        "/detect - Detect language only\n"
-        "Or send any text to translate."
-    )
 
-async def detect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Usage: /detect <text>")
-        return
+# BUTTON CALLBACKS
+async def button_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
-    text = " ".join(context.args)
-    lang = detect_language(text)
+    query = update.callback_query
 
-    await update.message.reply_text(
-        f"Detected Language Code: {lang}"
-    )
+    await query.answer()
 
-async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🌍 Telegram Translator Bot\n\n"
-        "This bot translates any language into English.\n"
-        "It automatically detects the input language and converts it.\n\n"
-        "✨ Features:\n"
-        "• Auto language detection\n"
-        "• English translation\n"
-        "• Inline re-translate button\n"
-        "• Voice message translation\n\n"
-        "👨‍💻 Meet the Developer:\n"
-        "@Thewarrior2003"
-    )
+    if query.data == "translate":
 
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎙 Processing voice message...")
-
-    voice = update.message.voice
-    file = await context.bot.get_file(voice.file_id)
-
-    file_path = f"temp_{update.effective_user.id}.ogg"
-    await file.download_to_drive(file_path)
-
-    try:
-        # Transcribe
-        text = transcribe_audio(file_path)
-
-        # DEBUG: Show what Whisper heard
-        print("DEBUG - Transcribed text:", text)
-        await update.message.reply_text(f"🔍 DEBUG - Transcribed:\n{text}")
-
-        # Translate using existing function
-        result = translate_text(text)
-
-        response = (
-            f"🎙 Voice Detected Language: {result['language_name']} {result['flag']}\n\n"
-            f"📝 English Translation:\n{result['translated_text']}"
+        await query.message.reply_text(
+            "🌍 Send any text message.\n"
+            "I will translate it."
         )
 
-        await update.message.reply_text(response)
+    elif query.data == "voice":
 
-    except Exception as e:
-        await update.message.reply_text("Voice translation failed.")
+        await query.message.reply_text(
+            "🎤 Send a voice message for translation."
+        )
 
-    finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+    elif query.data == "history":
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        history = get_user_history(
+            update.effective_user.id
+        )
+
+        if not history:
+
+            await query.message.reply_text(
+                "📭 No translation history found."
+            )
+
+            return
+
+        response = (
+            "📜 *Recent Translation History*\n\n"
+        )
+
+        for item in history:
+
+            original = item[0]
+            translated = item[1]
+            language = item[2]
+            timestamp = item[3]
+
+            response += (
+                f"📝 Original: {original}\n"
+                f"🌍 Translation: {translated}\n"
+                f"🔎 Language: {language}\n"
+                f"⏰ {timestamp}\n\n"
+            )
+
+        await query.message.reply_text(
+            response,
+            parse_mode="Markdown"
+        )
+
+    elif query.data == "about":
+
+        await query.message.reply_text(
+            "👨‍💻 Developer: @Thewarrior2003"
+        )
+
+
+# HELP COMMAND
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+        "📌 Commands:\n\n"
+        "/start - Start bot\n"
+        "/help - Help menu\n"
+        "/translate - Translate text\n"
+        "/history - Show history"
+    )
+
+
+# MULTI LANGUAGE TRANSLATION
+async def translate_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    try:
+
+        args = context.args
+
+        if len(args) < 3:
+
+            await update.message.reply_text(
+                "⚠️ Usage:\n"
+                "/translate <source_lang> "
+                "<target_lang> <text>\n\n"
+
+                "Example:\n"
+                "/translate hi fr नमस्ते"
+            )
+
+            return
+
+        source_lang = args[0]
+
+        target_lang = args[1]
+
+        text = " ".join(args[2:])
+
+        translated_text = translate_text(
+            text,
+            target_language=target_lang
+        )
+
+        response = (
+            "🌍 *Translation Complete*\n\n"
+
+            f"📝 *Original Text:*\n"
+            f"{text}\n\n"
+
+            f"🔎 *Source Language:*\n"
+            f"{source_lang}\n\n"
+
+            f"🎯 *Target Language:*\n"
+            f"{target_lang}\n\n"
+
+            f"✅ *Translated Text:*\n"
+            f"{translated_text}"
+        )
+
+        await update.message.reply_text(
+            response,
+            parse_mode="Markdown"
+        )
+
+    except Exception:
+
+        await update.message.reply_text(
+            "❌ Translation failed."
+        )
+
+
+# HISTORY COMMAND
+async def history_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    history = get_user_history(
+        update.effective_user.id
+    )
+
+    if not history:
+
+        await update.message.reply_text(
+            "📭 No translation history found."
+        )
+
+        return
+
+    response = (
+        "📜 *Recent Translation History*\n\n"
+    )
+
+    for item in history:
+
+        original = item[0]
+        translated = item[1]
+        language = item[2]
+        timestamp = item[3]
+
+        response += (
+            f"📝 Original: {original}\n"
+            f"🌍 Translation: {translated}\n"
+            f"🔎 Language: {language}\n"
+            f"⏰ {timestamp}\n\n"
+        )
+
+    await update.message.reply_text(
+        response,
+        parse_mode="Markdown"
+    )
+
+
+# HANDLE NORMAL TEXT
+async def handle_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     user_text = update.message.text.strip()
 
     if not user_text:
-        await update.message.reply_text("Please send valid text.")
+
+        await update.message.reply_text(
+            "⚠️ Please send valid text."
+        )
+
         return
 
     try:
-        result = translate_text(user_text)
 
-        response = (
-            f"Detected Language: {result['language_name']} {result['flag']}\n\n"
-            f"English Translation:\n{result['translated_text']}"
+        detected_language = detect_language(
+            user_text
         )
 
-        # Save last translation for this user
-        user_last_translation[update.effective_user.id] = user_text
+        translated_text = translate_text(
+            user_text
+        )
 
-        # Add inline button
-        keyboard = [
-            [InlineKeyboardButton("🔁 Translate Again", callback_data="translate_again")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        # SAVE TO DATABASE
+        save_translation(
+            update.effective_user.id,
+            user_text,
+            translated_text,
+            detected_language
+        )
 
-        await update.message.reply_text(response, reply_markup=reply_markup)
+        response = (
+            "🌍 *Translation Complete*\n\n"
+
+            f"📝 *Original Text:*\n"
+            f"{user_text}\n\n"
+
+            f"🔎 *Detected Language:*\n"
+            f"{detected_language}\n\n"
+
+            f"🇬🇧 *English Translation:*\n"
+            f"{translated_text}"
+        )
+
+        await update.message.reply_text(
+            response,
+            parse_mode="Markdown"
+        )
 
     except Exception:
-        await update.message.reply_text("Translation failed. Please try again.")
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+        await update.message.reply_text(
+            "❌ Translation failed."
+        )
 
-    user_id = query.from_user.id
 
-    if query.data == "translate_again":
-        if user_id in user_last_translation:
-            text = user_last_translation[user_id]
-            result = translate_text(text)
-
-            response = (
-                f"Detected Language: {result['language_name']} {result['flag']}\n\n"
-                f"English Translation:\n{result['translated_text']}"
-            )
-
-            await query.edit_message_text(response)
-        else:
-            await query.edit_message_text("No previous translation found.")
-
+# REGISTER ALL HANDLERS
 def register_handlers(app):
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("detect", detect_command))
-    app.add_handler(CommandHandler("about", about))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(CallbackQueryHandler(button_handler))
+
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CommandHandler("help", help_command)
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "translate",
+            translate_command
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "history",
+            history_command
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            button_callback
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_text
+        )
+    )

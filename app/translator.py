@@ -1,41 +1,53 @@
-# translation functions
 from deep_translator import GoogleTranslator
-from langdetect import detect, LangDetectException
+from langdetect import detect
+from langdetect.lang_detect_exception import LangDetectException
 import pycountry
 
-def get_language_name(code: str) -> str:
-    try:
-        language = pycountry.languages.get(alpha_2=code)
-        return language.name if language else code
-    except:
-        return code
 
-def get_flag_emoji(code: str) -> str:
-    try:
-        country_code = code.upper()
-        return ''.join(chr(127397 + ord(c)) for c in country_code)
-    except:
-        return ""
+# DETECT LANGUAGE
+def detect_language(text: str):
 
-def detect_language(text: str) -> str:
     try:
-        return detect(text)
+
+        # VERY SHORT TEXT
+        if len(text.strip()) < 5:
+            return "Unknown"
+
+        language_code = detect(text)
+
+        language = pycountry.languages.get(
+            alpha_2=language_code
+        )
+
+        if language:
+            return language.name
+
+        return language_code
+
     except LangDetectException:
-        return "unknown"
 
-def translate_text(text: str) -> dict:
-    detected_code = detect_language(text)
-    language_name = get_language_name(detected_code)
-    flag = get_flag_emoji(detected_code)
+        return "Unknown"
 
-    translated = GoogleTranslator(
-        source="auto",
-        target="en"
-    ).translate(text)
+    except Exception:
 
-    return {
-        "detected_code": detected_code,
-        "language_name": language_name,
-        "flag": flag,
-        "translated_text": translated
-    }
+        return "Unknown"
+
+
+# TRANSLATE TEXT
+def translate_text(
+    text: str,
+    target_language: str = "en"
+):
+
+    try:
+
+        translated = GoogleTranslator(
+            source="auto",
+            target=target_language
+        ).translate(text)
+
+        return translated
+
+    except Exception:
+
+        return "Translation Error"
